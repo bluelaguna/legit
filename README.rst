@@ -1,7 +1,9 @@
+.. -*-restructuredtext-*-
+
 Legit: Git for Humans
 =====================
 
-Inspired by GitHub for Mac™.
+Inspired by GitHub for Mac.
 
 
 The Concept
@@ -37,9 +39,12 @@ The Interface
     Creates a new branch off of the specified branch.
     Swiches to it immediately.
 
+``harvest [<branch>] <into-branch>``
+    Auto-Merge/Rebase of specified branch changes into the second branch.
+
 ``graft <branch> <into-branch>``
-    Merges specified branch into the second branch, and removes it.
-    You can only graft unpublished branches.
+    Auto-Merge/Rebase of specified branch into the second branch.
+    Immediately removes specified branch. You can only graft unpublished branches.
 
 ``publish <branch>``
     Publishes specified branch to the remote.
@@ -47,28 +52,32 @@ The Interface
 ``unpublish <branch>``
     Removes specified branch from the remote.
 
-``add`` & ``commit`` are also available, but you should just use ``git`` for those.
+``install``
+    Installs legit git aliases.
 
 
 The Installation
 ----------------
 
-**Warning**: don't use this for anything mission critical. It's still new.
+The easiest way to install legit is through homebrew::
 
-Installing Legit is easy with pip::
+    $ brew install legit
+
+You can also install it with pip::
 
     $ pip install legit
 
 You'll then have the wonderful ``legit`` command available. Run it within
 a repository.
 
-Binaries will be available soon.
+To install the git aliases, run the following command::
+
+    $ legit install
 
 
 Caveats
 -------
 
-- All remote operations are carried out by the first remote found.
-- If a ``stash pop`` merge fails, Legit stops. I'd like to add checking
- for a merge failure, and undo the command with friendly error reporting.
-- Pip install is cumbersome to people unfamiliar with Python. Package. (Py2App + PyInstaller)
+- All remote operations are carried out by the remote identified in ``$ git config legit.remote remotename``
+- If a ``stash pop`` merge fails, Legit stops. I'd like to add checking for a failed merge, and undo the command with friendly error reporting.
+- ``pip install`` is cumbersome to people unfamiliar with Python. Package. (Py2App + PyInstaller)

@@ -9,19 +9,20 @@ This module provides the main interface to Git.
 
 import os
 import sys
+import subprocess
 from collections import namedtuple
+from exceptions import ValueError
 from operator import attrgetter
 
-from git import Repo, Git
+from git import Repo
 from git.exc import GitCommandError
 
-from .helpers import find_path_above
 from .settings import settings
 
 
 LEGIT_TEMPLATE = 'Legit: stashing before {0}.'
 
-git = 'git'
+git = os.environ.get("GIT_PYTHON_GIT_EXECUTABLE", 'git')
 
 Branch = namedtuple('Branch', ['name', 'is_published'])
 
@@ -57,14 +58,14 @@ def repo_check(require_remote=False):
 
 def stash_it(sync=False):
     repo_check()
-    msg = 'syncing banch' if sync else 'switching branches'
+    msg = 'syncing branch' if sync else 'switching branches'
 
     return repo.git.execute([git,
-        'stash', 'save',
+        'stash', 'save', '--include-untracked',
         LEGIT_TEMPLATE.format(msg)])
 
 
-def unstash_index(sync=False):
+def unstash_index(sync=False, branch=None):
     """Returns an unstash index if one is available."""
 
     repo_check()
@@ -72,10 +73,12 @@ def unstash_index(sync=False):
     stash_list = repo.git.execute([git,
         'stash', 'list'])
 
+    if branch is None:
+        branch = repo.head.ref.name
+
     for stash in stash_list.splitlines():
 
         verb = 'syncing' if sync else 'switching'
-        branch = repo.head.ref.name
 
         if (
             (('Legit' in stash) and
@@ -87,23 +90,23 @@ def unstash_index(sync=False):
         ):
             return stash[7]
 
-def unstash_it(sync=False):
+def unstash_it(sync=False, branch=None):
     """Unstashes changes from current branch for branch sync."""
 
     repo_check()
 
-    stash_index = unstash_index(sync=sync)
+    stash_index = unstash_index(sync=sync, branch=branch)
 
     if stash_index is not None:
         return repo.git.execute([git,
-            'stash', 'pop', 'stash@{{0}}'.format(stash_index)])
+            'stash', 'pop', 'stash@{{{0}}}'.format(stash_index)])
 
 
 def fetch():
 
     repo_check()
 
-    return repo.git.execute([git, 'fetch', repo.remotes[0].name])
+    return repo.git.execute([git, 'fetch', remote.name])
 
 
 def smart_pull():
@@ -111,12 +114,11 @@ def smart_pull():
 
     repo_check()
 
-    remote = repo.remotes[0].name
     branch = repo.head.ref.name
 
     fetch()
 
-    return smart_merge('{0}/{1}'.format(remote, branch))
+    return smart_merge('{0}/{1}'.format(remote.name, branch))
 
 
 def smart_merge(branch, allow_rebase=True):
@@ -129,7 +131,7 @@ def smart_merge(branch, allow_rebase=True):
         'log', '--merges', '{0}..{1}'.format(branch, from_branch)])
 
     if allow_rebase:
-        verb = 'merge' if len(merges.split('commit')) else 'rebase'
+        verb = 'merge' if merges.count('commit') else 'rebase'
     else:
         verb = 'merge'
 
@@ -148,7 +150,7 @@ def push(branch=None):
     if branch is None:
         return repo.git.execute([git, 'push'])
     else:
-        return repo.git.execute([git, 'push', repo.remotes[0].name, branch])
+        return repo.git.execute([git, 'push', remote.name, branch])
 
 
 def checkout_branch(branch):
@@ -193,7 +195,7 @@ def unpublish_branch(branch):
     repo_check()
 
     return repo.git.execute([git,
-        'push', repo.remotes[0].name, ':{0}'.format(branch)])
+        'push', remote.name, ':{0}'.format(branch)])
 
 
 def publish_branch(branch):
@@ -202,22 +204,45 @@ def publish_branch(branch):
     repo_check()
 
     return repo.git.execute([git,
-        'push', repo.remotes[0].name, branch])
+        'push', '-u', remote.name, branch])
 
 
 def get_repo():
     """Returns the current Repo, based on path."""
 
-    bare_path = find_path_above('.git')
+    work_path = subprocess.Popen([git, 'rev-parse', '--show-toplevel'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE).communicate()[0].rstrip('\n')
 
-    if bare_path:
-        prelapsarian_path = os.path.split(bare_path)[0]
-        return Repo(prelapsarian_path)
+    if work_path:
+        return Repo(work_path)
     else:
         return None
 
 
-def get_branches(local=True, remote=True):
+def get_remote():
+
+    repo_check(require_remote=True)
+
+    reader = repo.config_reader()
+
+    # If there is no legit section return the default remote.
+    if not reader.has_section('legit'):
+        return repo.remotes[0]
+
+    # If there is no remote option in the legit section return the default.
+    if not any('legit' in s and 'remote' in s for s in reader.sections()):
+        return repo.remotes[0]
+
+    remote_name = reader.get('legit', 'remote')
+    if not remote_name in [r.name for r in repo.remotes]:
+        raise ValueError('Remote "{0}" does not exist! Please update your git '
+                         'configuration.'.format(remote_name))
+
+    return repo.remote(remote_name)
+
+
+def get_branches(local=True, remote_branches=True):
     """Returns a list of local and remote branches."""
 
     repo_check()
@@ -225,25 +250,24 @@ def get_branches(local=True, remote=True):
     # print local
     branches = []
 
-    if remote:
+    if remote_branches:
 
         # Remote refs.
         try:
-            for b in repo.remotes[0].refs:
+            for b in remote.refs:
                 name = '/'.join(b.name.split('/')[1:])
 
                 if name not in settings.forbidden_branches:
                     branches.append(Branch(name, True))
-        except IndexError:
+        except (IndexError, AssertionError):
             pass
-
 
     if local:
 
         # Local refs.
         for b in [h.name for h in repo.heads]:
 
-            if b not in [br.name for br in branches] or not remote:
+            if b not in [br.name for br in branches] or not remote_branches:
                 if b not in settings.forbidden_branches:
                     branches.append(Branch(b, False))
 
@@ -251,14 +275,14 @@ def get_branches(local=True, remote=True):
     return sorted(branches, key=attrgetter('name'))
 
 
-def get_branch_names(local=True, remote=True):
+def get_branch_names(local=True, remote_branches=True):
 
     repo_check()
 
-    branches = get_branches(local=local, remote=remote)
+    branches = get_branches(local=local, remote_branches=remote_branches)
 
     return [b.name for b in branches]
 
 
-
 repo = get_repo()
+remote = get_remote()
